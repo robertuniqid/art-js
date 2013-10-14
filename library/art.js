@@ -11,29 +11,150 @@ var Art = {
       }
 
       settings.data = typeof settings.data == "undefined" ? null : settings.data;
-      settings.path = typeof settings.path == "undefined" ? '' : settings.path;
+
+      if(typeof settings.data == "object")
+        settings.data = Art.JSON.recursiveToString(settings.data);
+
+      settings.path = typeof settings.path == "undefined" ? ''     : settings.path;
+      settings.type = typeof settings.type == "undefined" ? 'html' : settings.type.toLowerCase();
       settings.onSuccessEvent = typeof settings.onSuccessEvent == "undefined" ?
                                false : settings.onSuccessEvent;
       settings.onErrorEvent = typeof settings.onErrorEvent == "undefined" ?
                              false : settings.onErrorEvent;
 
       var xhr = new XMLHttpRequest();
-          xhr.open('get', settings.path + '?t=' + parseInt(new Date().getTime() / 1000));
+          xhr.submittedData = settings.data;
+          xhr.open('POST', settings.path + '?t=' + parseInt(new Date().getTime() / 1000));
+          xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
           xhr.onreadystatechange = function(){
             if(xhr.readyState === 4){
               if(xhr.status === 200) {
-                if(settings.onSuccessEvent != false)
-                  Art.EventManager.triggerEvent(settings.onSuccessEvent, xhr.responseText);
+                if(settings.onSuccessEvent != false) {
+                  var data = settings.type == 'json' ? Art.JSON.fromString(xhr.responseText) : xhr.responseText;
+
+                  Art.EventManager.triggerEvent(settings.onSuccessEvent, data);
+                }
               } else {
                 if(settings.onErrorEvent != false)
-                  Art.EventManager.triggerEvent(settings.onErrorEvent, xhr.status);
+                  Art
+                    .EventManager
+                    .triggerEvent(
+                      settings.onErrorEvent,
+                      {
+                        'status'       : xhr.status,
+                        'statusText'   : xhr.statusText
+                      });
               }
             }
           };
           xhr.send(settings.data);
     }
   },
+
+  Cookies : {
+    defaults: {
+      expiryDays: 7
+    },
+
+    setCookie: function(name, value, days) {
+      if (!days) {
+        days = this.defaults.expiryDays;
+      }
+
+      var date = new Date();
+      date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+      var expires = "; expires=" + date.toGMTString();
+
+      document.cookie = name + "=" + value + expires + "; path=/";
+
+      return {"name": name, "value": value};
+    },
+
+    getCookie: function(name) {
+      var nameEQ = name + "=",
+          ca = document.cookie.split(";");
+      for (i = 0; i < ca.length; i++) {
+        c = ca[i];
+        while (c.charAt(0) == " ") {
+          c = c.substring(1, c.length);
+        }
+        if (c.indexOf(nameEQ) == 0) {
+          return c.substring(nameEQ.length, c.length);
+        } else {}
+      }
+      return "";
+    },
+
+    deleteCookie: function(name) {
+      this.setCookie(name, "", -1);
+      return {"name": name, "value": null};
+    }
+  },
+
   JSON : {
+
+    fromString : function(string) {
+      return JSON.parse(string);
+    },
+
+    recursiveToString : function(information) {
+      var ret = '';
+
+      for(var i in information) {
+        var key   = i,
+            value = information[i];
+
+        if(typeof value == "object" || typeof value == "array") {
+          for(var valueIndex in value) {
+            ret += (ret == '' ? '' : '&') + (encodeURI(key) + '[' + valueIndex + ']=' + encodeURI(value[valueIndex]));
+          }
+        } else {
+          ret += (ret == '' ? '' : '&') + (encodeURI(key) + '=' + encodeURI(value));
+        }
+      }
+
+      return ret;
+    },
+
+    merge : function() {
+      var finalObject = {};
+
+      for(var currentArgumentPosition = 0; currentArgumentPosition < arguments.length ; currentArgumentPosition++) {
+        if(typeof arguments[currentArgumentPosition] == "object") {
+          var currentArgument = arguments[currentArgumentPosition];
+
+          for(var currentArgumentIndex in currentArgument) {
+            if(!finalObject.hasOwnProperty(currentArgumentIndex)) {
+              finalObject[currentArgumentIndex] = currentArgument[currentArgumentIndex];
+            } else {
+              if(finalObject[currentArgumentIndex] instanceof Array
+                        && currentArgument[currentArgumentIndex] instanceof Array) {
+                for(var currentArgumentIndexArrayWalker = 0;
+                        currentArgumentIndexArrayWalker < currentArgument[currentArgumentIndex].length;
+                        currentArgumentIndexArrayWalker++) {
+                  finalObject[currentArgumentIndex][finalObject[currentArgumentIndex].length]
+                      = currentArgument[currentArgumentIndex][currentArgumentIndexArrayWalker];
+                }
+
+              } else if(typeof finalObject[currentArgumentIndex] == 'object'
+                  && typeof currentArgument[currentArgumentIndex] == 'object') {
+
+                // Don't do a deep copy, for now
+
+                finalObject[currentArgumentIndex] = currentArgument[currentArgumentIndex];
+
+              } else {
+                finalObject[currentArgumentIndex] = currentArgument[currentArgumentIndex];
+              }
+            }
+          }
+        }
+      }
+
+      return finalObject;
+    },
+
+
     keyCount : function(object) {
       var count = 0;
 
@@ -43,6 +164,15 @@ var Art = {
       return count;
     }
   },
+
+  String : {
+
+    ucFirst : function(string) {
+      return string.charAt(0).toUpperCase() + string.slice(1);
+    }
+
+  },
+
   Array : {
 
     /**
@@ -115,6 +245,7 @@ var Art = {
     },
 
     loadScripts : function(scriptsInformation, callback) {
+      callback = typeof callback == "undefined" ? false : callback;
       // Set the current request number and increment the count of course.
       var currentRequestNumber = Art.Loader.requestNumber;
       Art.Loader.requestNumber++;
@@ -126,27 +257,28 @@ var Art = {
 
       for(var scriptPath in scriptsInformation) {
         if(scriptPath.slice(-3) == 'css') {
-          Art.Loader._loadStyle(scriptPath + '?t=' + parseInt(new Date().getTime() / 1000),
+          Art.Loader._loadStyle(scriptPath,
                                 scriptsInformation[scriptPath],
                                 function(){
             Art.Loader.requestInformation[currentRequestNumber].loaded_count++;
 
             if(Art.Loader.requestInformation[currentRequestNumber].script_count
                 == Art.Loader.requestInformation[currentRequestNumber].loaded_count) {
-              callback.call();
+              if(callback != false)
+                callback.call();
             }
           });
         } else {
 
-          Art.Loader._loadScript(scriptPath + '?t=' + parseInt(new Date().getTime() / 1000),
+          Art.Loader._loadScript(scriptPath,
                                  scriptsInformation[scriptPath],
                                  function(){
             Art.Loader.requestInformation[currentRequestNumber].loaded_count++;
 
             if(Art.Loader.requestInformation[currentRequestNumber].script_count
                 == Art.Loader.requestInformation[currentRequestNumber].loaded_count) {
-
-              callback.call();
+              if(callback != false)
+                callback.call();
             }
           });
         }
@@ -178,7 +310,7 @@ var Art = {
     _loadScript : function(script_path, scriptAlias, callback) {
       var script  = document.createElement('script');
       script.type = 'text/javascript';
-      script.src  = script_path;
+      script.src  = script_path + '?t=' + parseInt(new Date().getTime() / 1000);
       if(typeof callback != "undefined" && callback != false)
         script.onload = function(){
           Art.Loader._internalScriptLoadCallback(scriptAlias, callback);
@@ -190,7 +322,7 @@ var Art = {
     _loadStyle : function(script_path, scriptAlias, callback) {
       var style  = document.createElement('link');
       style.rel = 'stylesheet';
-      style.href  = script_path;
+      style.href  = script_path + '?t=' + parseInt(new Date().getTime() / 1000);
       if(typeof callback != "undefined" && callback != false)
         style.onload = function(){
           Art.Loader._internalScriptLoadCallback(scriptAlias, callback);
@@ -391,6 +523,16 @@ var Art = {
 
     _prepareCurrentRequest : function() {
       this.paramListString = this.getCurrentURL().replace(this.baseUrl, '').trim();
+    },
+
+    redirect : function(path) {
+      if(typeof window.history.pushState == "undefined" || 1 == 1) {
+        window.location = path;
+        return;
+      }
+
+      window.history.pushState({}, "", path);
+      Art._dispatchRequestAndBootstrapApplication();
     }
 
   },
@@ -416,16 +558,22 @@ var Art = {
     },
 
     _onCurrentControllerLoad : function() {
-      Art.View.init();
-    },
-
-    _onCurrentViewDisplay : function() {
       Art.Bootstrap.currentController = eval(Art.Request.currentController);
 
       if(typeof Art.Bootstrap.currentController[Art.Request.currentAction] == "undefined") {
         Art.Bootstrap.currentController = eval(Art.Router.getErrorControllerName());
       }
 
+      if(typeof Art.
+                Bootstrap.
+                currentController['_onViewLoad' + Art.String.ucFirst(Art.Request.currentAction)]
+                  == "function")
+        Art.Bootstrap.currentController['_onViewLoad' + Art.String.ucFirst(Art.Request.currentAction)].call();
+
+      Art.View.init();
+    },
+
+    _onCurrentViewDisplay : function() {
       if(typeof Art.Bootstrap.currentController.init == "function")
         Art.Bootstrap.currentController.init();
 
@@ -437,15 +585,37 @@ var Art = {
   View : {
 
     domHelper     : {
-      body : {}
+      applicationContainer : false
     },
+    displayLayout : true,
     layoutContent : '',
     viewContent   : '',
     viewPath      : '',
     layoutPath    : '',
+    _hasInit      : false,
+
+    setApplicationContainer : function(container) {
+      if(this._hasInit) {
+        alert('View will not allow setting an application container after Application Load');
+        return;
+      }
+
+      if(typeof container == "object") {
+        this.domHelper.applicationContainer = container;
+      } else if(typeof container == "string") {
+        if(container.charAt(0) == '#')
+          this.domHelper.applicationContainer = document.getElementById(container.slice(1));
+        else
+          this.domHelper.applicationContainer = document.getElementsByTagName(container)[0];
+      } else {
+        alert('Container of type' + (typeof container) + ' has been passed to Art.View.setApplicationContainer, which is invalid');
+      }
+    },
 
     init : function() {
-      this.domHelper.body = document.getElementsByTagName('body')[0];
+      // We have no set container, I guess we're going to use <body>
+      if(this.domHelper.applicationContainer == false)
+        this.domHelper.applicationContainer = document.getElementsByTagName('body')[0];
 
       Art.EventManager.listenEvent('artOnAjaxLayoutGetSuccess', Art.View, '_ajaxGetLayoutContentOk');
       Art.EventManager.listenEvent('artOnAjaxLayoutGetError', Art.View, '_ajaxGetLayoutContentError');
@@ -460,11 +630,19 @@ var Art = {
                           '.html';
       this.layoutPath = 'application/layout/layout.html';
 
-      Art.AJAX.getContent({
-        'path'            : this.layoutPath,
-        'onSuccessEvent'  : 'artOnAjaxLayoutGetSuccess',
-        'onErrorEvent'    : 'artOnAjaxLayoutGetError'
-      });
+      this._setCurrentLayout();
+      this._hasInit = true;
+    },
+
+    _setCurrentLayout : function() {
+      if(this.layoutContent == '')
+        Art.AJAX.getContent({
+          'path'            : this.layoutPath,
+          'onSuccessEvent'  : 'artOnAjaxLayoutGetSuccess',
+          'onErrorEvent'    : 'artOnAjaxLayoutGetError'
+        });
+      else
+        Art.EventManager.triggerEvent('artOnAjaxLayoutGetSuccess', this.layoutContent);
     },
 
     _ajaxGetLayoutContentOk : function(content) {
@@ -484,7 +662,12 @@ var Art = {
     _ajaxGetViewContentOk : function(content) {
       Art.View.viewContent = content;
 
-      Art.View.domHelper.body.innerHTML = this.layoutContent.replace('[viewContent]', Art.View.viewContent);
+      Art.View.domHelper.applicationContainer.innerHTML = (this.displayLayout == true ?
+                                            this.layoutContent.replace('[viewContent]', Art.View.viewContent) :
+                                            Art.View.viewContent);
+
+      // Set back to default state
+      this.displayLayout = true;
 
       Art.EventManager.triggerEvent('artOnViewDisplayed');
     },
@@ -615,7 +798,10 @@ var Art = {
             'component-' + component_name,
             function(){
               var componentLibraryName = eval(Art.ComponentManager._map[component_name].handler),
-                  componentInstance    = new componentLibraryName(params);
+                  objectClone = Art.JSON.merge(componentLibraryName, {});
+
+              if(typeof objectClone.init != "undefined")
+                objectClone.init(params);
             }
         );
     },
@@ -640,10 +826,21 @@ var Art = {
     this.EventManager.init();
   },
 
-  runApplication : function() {
-    Art.EventManager.listenEvent('artOnViewDisplayed', Art.ComponentManager, 'init');
-
+  _dispatchRequestAndBootstrapApplication : function() {
     this.Request.init();
     this.Bootstrap.init();
+  },
+
+  runApplication : function() {
+    this.EventManager.listenEvent('artOnViewDisplayed', Art.ComponentManager, 'init');
+    this._dispatchRequestAndBootstrapApplication();
+  },
+
+  /**
+   * @property Art.Request.redirect
+   * @param path
+   */
+  redirect : function(path) {
+    this.Request.redirect(path);
   }
 };
